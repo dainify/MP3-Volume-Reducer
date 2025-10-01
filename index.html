@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MP3 Volume Reducer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <!-- MP3 Encoder Library -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/lamejs/1.2.0/lame.min.js"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        .loader {
+            border-top-color: #3498db;
+            -webkit-animation: spin 1.5s ease-in-out infinite;
+            animation: spin 1.5s ease-in-out infinite;
+        }
+        @-webkit-keyframes spin {
+            0% { -webkit-transform: rotate(0deg) scale(1); }
+            50% { -webkit-transform: rotate(180deg) scale(1.1); }
+            100% { -webkit-transform: rotate(360deg) scale(1); }
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg) scale(1); }
+            50% { transform: rotate(180deg) scale(1.1); }
+            100% { transform: rotate(360deg) scale(1); }
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-white flex items-center justify-center min-h-screen">
+    <div class="w-full max-w-lg mx-auto p-8 bg-gray-800 rounded-2xl shadow-2xl space-y-6">
+        <div class="text-center">
+            <h1 class="text-3xl font-bold text-cyan-400">MP3 Volume Reducer</h1>
+            <p class="text-gray-400 mt-2">Upload an audio file to adjust its volume.</p>
+        </div>
+
+        <!-- File Upload Section -->
+        <div id="upload-section">
+            <label for="audio-file" class="flex flex-col items-center justify-center w-full h-48 border-2 border-dashed border-gray-600 rounded-lg cursor-pointer bg-gray-700 hover:bg-gray-600 transition-colors">
+                <div class="flex flex-col items-center justify-center pt-5 pb-6">
+                    <svg class="w-10 h-10 mb-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path></svg>
+                    <p class="mb-2 text-sm text-gray-400"><span class="font-semibold">Click to upload</span> or drag and drop</p>
+                    <p class="text-xs text-gray-500">MP3, WAV, OGG (MAX. 50MB)</p>
+                </div>
+                <input id="audio-file" type="file" class="hidden" accept="audio/mp3, audio/wav, audio/ogg">
+            </label>
+            <p id="file-name" class="text-center mt-2 text-sm text-gray-400"></p>
+        </div>
+
+        <!-- Controls Section -->
+        <div id="controls-section" class="hidden space-y-4">
+            <div class="space-y-2">
+                <label for="volume" class="block text-sm font-medium text-gray-300">Volume: <span id="volume-value" class="font-bold text-cyan-400">70</span>%</label>
+                <input id="volume" type="range" min="0" max="100" value="70" class="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer">
+            </div>
+             <button id="process-btn" class="w-full bg-cyan-500 hover:bg-cyan-600 text-white font-bold py-3 px-4 rounded-lg transition-transform transform hover:scale-105 focus:outline-none focus:ring-4 focus:ring-cyan-300">
+                Process Volume
+            </button>
+        </div>
+
+        <!-- Status Section -->
+        <div id="status-section" class="hidden flex flex-col items-center justify-center space-y-4">
+             <div class="loader ease-linear rounded-full border-4 border-t-4 border-gray-500 h-12 w-12"></div>
+             <span id="status-text" class="text-lg text-gray-300">Processing audio...</span>
+             <div class="w-full bg-gray-600 rounded-full h-2.5">
+                <div id="progress-bar" class="bg-cyan-400 h-2.5 rounded-full transition-all duration-100 ease-linear" style="width: 0%"></div>
+             </div>
+        </div>
+
+        <!-- Result Section -->
+        <div id="result-section" class="hidden text-center space-y-4">
+             <h2 class="text-xl font-semibold text-green-400">Processing Complete!</h2>
+             <p class="text-gray-400">Preview your volume-adjusted audio below.</p>
+             <audio id="result-audio" controls class="w-full"></audio>
+             <a id="download-link" class="inline-block w-full bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-4 rounded-lg transition-transform transform hover:scale-105 focus:outline-none focus:ring-4 focus:ring-green-300" download="processed_audio.mp3">
+                Download Processed File
+             </a>
+             <button id="reset-btn" class="w-full bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg mt-2">Process Another File</button>
+        </div>
+    </div>
+
+    <script>
+        // --- Web Worker Script ---
+        // This script will run in a separate thread to avoid freezing the UI.
+        const workerScript = `
+            self.importScripts('https://cdnjs.cloudflare.com/ajax/libs/lamejs/1.2.0/lame.min.js');
+
+            self.onmessage = function(e) {
+                const { numChannels, sampleRate, channelData } = e.data;
+                
+                // Convert Float32Array to Int16Array
+                const int16Samples = [];
+                for (let i = 0; i < numChannels; i++) {
+                    const channel = channelData[i];
+                    const int16Data = new Int16Array(channel.length);
+                    for (let j = 0; j < channel.length; j++) {
+                        // clamp and convert to 16-bit
+                        const s = Math.max(-1, Math.min(1, channel[j]));
+                        int16Data[j] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+                    }
+                    int16Samples.push(int16Data);
+                }
+
+                const kbps = 128; // MP3 bitrate
+                const mp3encoder = new lamejs.Mp3Encoder(numChannels, sampleRate, kbps);
+                const mp3Data = [];
+                const sampleBlockSize = 1152;
+                const totalSamples = int16Samples[0].length;
+
+                for (let i = 0; i < totalSamples; i += sampleBlockSize) {
+                    const leftChunk = int16Samples[0].subarray(i, i + sampleBlockSize);
+                    let rightChunk = numChannels > 1 ? int16Samples[1].subarray(i, i + sampleBlockSize) : null;
+                    const mp3buf = mp3encoder.encodeBuffer(leftChunk, rightChunk);
+                    if (mp3buf.length > 0) {
+                        mp3Data.push(mp3buf);
+                    }
+                     // Post progress update
+                    const progress = (i / totalSamples) * 100;
+                    self.postMessage({ type: 'progress', value: progress });
+                }
+                const mp3buf = mp3encoder.flush();
+
+                if (mp3buf.length > 0) {
+                    mp3Data.push(mp3buf);
+                }
+
+                const blob = new Blob(mp3Data.map(d => new Uint8Array(d)), {type: 'audio/mp3'});
+                self.postMessage({ type: 'complete', blob: blob }); // Send the encoded MP3 blob back to the main thread
+            };
+        `;
+
+        const fileInput = document.getElementById('audio-file');
+        const fileNameDisplay = document.getElementById('file-name');
+        const uploadSection = document.getElementById('upload-section');
+        const controlsSection = document.getElementById('controls-section');
+        const statusSection = document.getElementById('status-section');
+        const statusText = document.getElementById('status-text');
+        const resultSection = document.getElementById('result-section');
+        const processBtn = document.getElementById('process-btn');
+        const downloadLink = document.getElementById('download-link');
+        const resultAudio = document.getElementById('result-audio');
+        const resetBtn = document.getElementById('reset-btn');
+        const progressBar = document.getElementById('progress-bar');
+
+        const volumeSlider = document.getElementById('volume');
+        const volumeValue = document.getElementById('volume-value');
+        
+        let audioBuffer = null;
+        let originalFileName = '';
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+
+        // Update slider value displays
+        volumeSlider.addEventListener('input', () => volumeValue.textContent = volumeSlider.value);
+        
+        fileInput.addEventListener('change', handleFileSelect);
+        processBtn.addEventListener('click', processAudio);
+        resetBtn.addEventListener('click', resetApp);
+        
+        function handleFileSelect(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            originalFileName = file.name.replace(/\.[^/.]+$/, ""); // Store filename without extension
+            fileNameDisplay.textContent = file.name;
+            controlsSection.classList.remove('hidden');
+            
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                statusText.textContent = 'Decoding audio...';
+                statusSection.classList.remove('hidden');
+                controlsSection.classList.add('hidden');
+                uploadSection.classList.add('hidden');
+
+                audioContext.decodeAudioData(e.target.result)
+                    .then(buffer => {
+                        audioBuffer = buffer;
+                        statusSection.classList.add('hidden');
+                        controlsSection.classList.remove('hidden');
+                    })
+                    .catch(err => {
+                        console.error('Error decoding audio file:', err);
+                        alert('Error decoding audio file. Please try a different file.');
+                        resetApp();
+                    });
+            };
+            reader.readAsArrayBuffer(file);
+        }
+
+        function processAudio() {
+            if (!audioBuffer) {
+                alert('Please upload an audio file first.');
+                return;
+            }
+
+            controlsSection.classList.add('hidden');
+            progressBar.style.width = '0%';
+            statusText.textContent = 'Adjusting volume & encoding MP3...';
+            statusSection.classList.remove('hidden');
+
+            // --- Initialize Web Worker ---
+            const workerBlob = new Blob([workerScript], { type: 'application/javascript' });
+            const workerUrl = URL.createObjectURL(workerBlob);
+            const mp3Worker = new Worker(workerUrl);
+
+            // Handle message from worker (when encoding is complete)
+            mp3Worker.onmessage = function(e) {
+                if (e.data.type === 'progress') {
+                    progressBar.style.width = e.data.value + '%';
+                } else if (e.data.type === 'complete') {
+                    progressBar.style.width = '100%';
+                    const mp3Blob = e.data.blob;
+                    const url = URL.createObjectURL(mp3Blob);
+                    
+                    setTimeout(() => {
+                        resultAudio.src = url;
+                        downloadLink.href = url;
+                        downloadLink.download = `${originalFileName}_volume_${volumeSlider.value}.mp3`;
+                        
+                        statusSection.classList.add('hidden');
+                        resultSection.classList.remove('hidden');
+
+                        mp3Worker.terminate();
+                        URL.revokeObjectURL(workerUrl);
+                    }, 400);
+                }
+            };
+
+            const volume = parseInt(volumeSlider.value) / 100;
+            const offlineContext = new OfflineAudioContext(audioBuffer.numberOfChannels, audioBuffer.length, audioBuffer.sampleRate);
+            const source = offlineContext.createBufferSource();
+            source.buffer = audioBuffer;
+
+            const gainNode = offlineContext.createGain();
+            gainNode.gain.setValueAtTime(volume, offlineContext.currentTime);
+            
+            source.connect(gainNode);
+            gainNode.connect(offlineContext.destination);
+            source.start(0);
+
+            offlineContext.startRendering().then(renderedBuffer => {
+                const numChannels = renderedBuffer.numberOfChannels;
+                const sampleRate = renderedBuffer.sampleRate;
+                const channelData = [];
+                const transferList = []; 
+
+                for (let i = 0; i < numChannels; i++) {
+                    const data = renderedBuffer.getChannelData(i);
+                    channelData.push(data);
+                    transferList.push(data.buffer);
+                }
+
+                mp3Worker.postMessage({
+                    numChannels,
+                    sampleRate,
+                    channelData
+                }, transferList);
+
+            }).catch(err => {
+                alert('An error occurred during processing.');
+                console.error('Rendering failed: ' + err);
+                mp3Worker.terminate();
+                URL.revokeObjectURL(workerUrl);
+                resetApp();
+            });
+        }
+        
+        function resetApp() {
+            fileInput.value = '';
+            fileNameDisplay.textContent = '';
+            audioBuffer = null;
+            uploadSection.classList.remove('hidden');
+            controlsSection.classList.add('hidden');
+            statusSection.classList.add('hidden');
+            resultSection.classList.add('hidden');
+            if(resultAudio.src) URL.revokeObjectURL(resultAudio.src);
+        }
+    </script>
+</body>
+</html>
